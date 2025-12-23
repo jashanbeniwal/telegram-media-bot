@@ -1,216 +1,226 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-import logging
+from database.operations import DatabaseOperations, UserSettings
+from utils.premium import is_premium_user
 
-from config import config
-from database.operations import get_db_operations
-from utils.premium import check_premium_status
-
-logger = logging.getLogger(__name__)
-
-async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /settings command"""
+async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show settings panel"""
     user_id = update.effective_user.id
     
-    # Check premium status
-    is_premium = await check_premium_status(user_id)
-    
     # Get current settings
-    db_ops = await get_db_operations()
-    settings = await db_ops.get_user_settings(user_id)
+    settings_data = await DatabaseOperations.get_user_settings(user_id)
+    if not settings_data:
+        await DatabaseOperations.init_user_settings(user_id)
+        settings_data = await DatabaseOperations.get_user_settings(user_id)
     
-    if not settings:
-        await update.message.reply_text("❌ Failed to load settings. Please try again.")
-        return
+    # Check premium
+    premium = await is_premium_user(user_id)
+    
+    # Create settings message
+    settings_text = f"""
+    ⚙️ *Settings Panel*
+
+    👤 User: {update.effective_user.first_name}
+    📊 Status: {'⭐ PREMIUM' if premium else '🆓 FREE'}
+    
+    *Current Settings*:
+    • 🔄 Bulk Mode: `{settings_data.bulk_mode.upper()}`
+    • 🖼️ Thumbnail: `{'ON' if settings_data.thumbnail else 'OFF'}`
+    • 📝 Rename Files: `{'ON' if settings_data.rename_files else 'OFF'}`
+    • ⬆️ Upload as: `{settings_data.upload_mode.upper()}`
+    • 📊 Video Metadata: `{'ON' if settings_data.video_metadata else 'OFF'}`
+    • 🔊 Audio Bitrate: `{settings_data.audio_bitrate}`
+    • 🎚️ Audio Speed: `{settings_data.audio_speed}x`
+    • 🔊 Audio Volume: `{settings_data.audio_volume}%`
+    """
     
     # Create settings keyboard
     keyboard = [
-        [InlineKeyboardButton(f"🔄 Bulk Mode: {settings.bulk_mode.upper()}", callback_data="set_bulk_mode")],
-        [InlineKeyboardButton(f"🖼️ Thumbnail: {'ON' if settings.thumbnail_enabled else 'OFF'}", callback_data="set_thumbnail")],
-        [InlineKeyboardButton(f"📝 Rename Files: {'ON' if settings.rename_files else 'OFF'}", callback_data="set_rename")],
-        [InlineKeyboardButton(f"⬆️ Upload as: {settings.upload_mode.upper()}", callback_data="set_upload_mode")],
-        [InlineKeyboardButton(f"📊 Video Metadata: {'ON' if settings.video_metadata else 'OFF'}", callback_data="set_metadata")],
-        [InlineKeyboardButton("🎵 MP3 Tag Settings", callback_data="set_mp3_tags")],
-        [InlineKeyboardButton("🔊 Audio Settings", callback_data="set_audio_settings")],
-        [InlineKeyboardButton("🔄 Reset Settings", callback_data="set_reset")],
-        [InlineKeyboardButton("❌ Close", callback_data="set_close")]
+        [
+            InlineKeyboardButton(f"🔄 Bulk: {settings_data.bulk_mode.upper()}", 
+                               callback_data="settings_toggle_bulk"),
+            InlineKeyboardButton(f"🖼️ Thumb: {'✅' if settings_data.thumbnail else '❌'}", 
+                               callback_data="settings_toggle_thumb")
+        ],
+        [
+            InlineKeyboardButton(f"📝 Rename: {'✅' if settings_data.rename_files else '❌'}", 
+                               callback_data="settings_toggle_rename"),
+            InlineKeyboardButton(f"⬆️ Upload: {settings_data.upload_mode.upper()}", 
+                               callback_data="settings_cycle_upload")
+        ],
+        [
+            InlineKeyboardButton(f"📊 Metadata: {'✅' if settings_data.video_metadata else '❌'}", 
+                               callback_data="settings_toggle_metadata"),
+            InlineKeyboardButton("🎵 Audio Settings", callback_data="settings_audio")
+        ],
+        [
+            InlineKeyboardButton("🎵 MP3 Tags", callback_data="settings_mp3_tags"),
+            InlineKeyboardButton("🔊 Audio Effects", callback_data="settings_effects")
+        ],
+        [
+            InlineKeyboardButton("🔄 Reset Settings", callback_data="settings_reset"),
+            InlineKeyboardButton("❌ Close", callback_data="settings_close")
+        ]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Premium badge
-    premium_text = "⭐ PREMIUM USER" if is_premium else "🆓 FREE USER"
-    
-    message_text = f"""
-    ⚙️ **Settings Panel** ⚙️
-
-    👤 User: {update.effective_user.first_name}
-    📊 Status: {premium_text}
-    
-    Current Settings:
-    • Bulk Mode: {settings.bulk_mode.upper()}
-    • Thumbnail: {'✅ ON' if settings.thumbnail_enabled else '❌ OFF'}
-    • Rename Files: {'✅ ON' if settings.rename_files else '❌ OFF'}
-    • Upload as: {settings.upload_mode.upper()}
-    • Video Metadata: {'✅ ON' if settings.video_metadata else '❌ OFF'}
-    • Audio Speed: {settings.audio_speed}x
-    • Audio Volume: {settings.audio_volume}%
-    
-    Click buttons to toggle settings.
-    """
-    
     await update.message.reply_text(
-        message_text,
+        settings_text,
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
 
 async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle settings callback queries"""
+    """Handle settings callbacks"""
     query = update.callback_query
     await query.answer()
     
     user_id = update.effective_user.id
     action = query.data
     
-    db_ops = await get_db_operations()
-    settings = await db_ops.get_user_settings(user_id)
+    # Get current settings
+    settings_data = await DatabaseOperations.get_user_settings(user_id)
     
-    if not settings:
-        await query.edit_message_text("❌ Failed to load settings.")
-        return
+    if action == "settings_toggle_bulk":
+        new_mode = "on" if settings_data.bulk_mode == "off" else "off"
+        await DatabaseOperations.update_settings(user_id, bulk_mode=new_mode)
     
-    if action == "set_bulk_mode":
-        # Toggle bulk mode
-        new_mode = "off" if settings.bulk_mode == "on" else "on"
-        await db_ops.update_user_settings(user_id, bulk_mode=new_mode)
-        
-    elif action == "set_thumbnail":
-        # Toggle thumbnail
-        new_thumbnail = not settings.thumbnail_enabled
-        await db_ops.update_user_settings(user_id, thumbnail_enabled=new_thumbnail)
-        
-    elif action == "set_rename":
-        # Toggle rename
-        new_rename = not settings.rename_files
-        await db_ops.update_user_settings(user_id, rename_files=new_rename)
-        
-    elif action == "set_upload_mode":
-        # Cycle through upload modes
+    elif action == "settings_toggle_thumb":
+        await DatabaseOperations.update_settings(user_id, thumbnail=not settings_data.thumbnail)
+    
+    elif action == "settings_toggle_rename":
+        await DatabaseOperations.update_settings(user_id, rename_files=not settings_data.rename_files)
+    
+    elif action == "settings_cycle_upload":
         modes = ["video", "audio", "document"]
-        current_index = modes.index(settings.upload_mode)
-        next_mode = modes[(current_index + 1) % len(modes)]
-        await db_ops.update_user_settings(user_id, upload_mode=next_mode)
-        
-    elif action == "set_metadata":
-        # Toggle metadata
-        new_metadata = not settings.video_metadata
-        await db_ops.update_user_settings(user_id, video_metadata=new_metadata)
-        
-    elif action == "set_mp3_tags":
-        # Show MP3 tag settings
-        await show_mp3_tags_settings(query, settings)
+        current_idx = modes.index(settings_data.upload_mode)
+        next_mode = modes[(current_idx + 1) % len(modes)]
+        await DatabaseOperations.update_settings(user_id, upload_mode=next_mode)
+    
+    elif action == "settings_toggle_metadata":
+        await DatabaseOperations.update_settings(user_id, video_metadata=not settings_data.video_metadata)
+    
+    elif action == "settings_audio":
+        await show_audio_settings(query, settings_data)
         return
-        
-    elif action == "set_audio_settings":
-        # Show audio settings
-        await show_audio_settings(query, settings)
+    
+    elif action == "settings_mp3_tags":
+        await show_mp3_tags(query, settings_data)
         return
-        
-    elif action == "set_reset":
-        # Reset settings
-        await db_ops.reset_user_settings(user_id)
-        await query.edit_message_text("✅ Settings reset to default!")
+    
+    elif action == "settings_effects":
+        await show_audio_effects(query, settings_data)
         return
-        
-    elif action == "set_close":
-        # Close settings
+    
+    elif action == "settings_reset":
+        await DatabaseOperations.reset_settings(user_id)
+        await query.edit_message_text("✅ Settings reset to defaults!")
+        return
+    
+    elif action == "settings_close":
         await query.delete_message()
         return
     
     # Refresh settings display
-    await settings_command(update, context)
+    await settings(update, context)
 
-async def show_mp3_tags_settings(query, settings):
-    """Show MP3 tag settings panel"""
+async def show_audio_settings(query, settings_data):
+    """Show audio settings panel"""
     keyboard = [
         [
-            InlineKeyboardButton("Title", callback_data="mp3_title"),
-            InlineKeyboardButton("Artist", callback_data="mp3_artist"),
+            InlineKeyboardButton(f"Bitrate: {settings_data.audio_bitrate}", 
+                               callback_data="audio_bitrate_menu"),
+            InlineKeyboardButton(f"Sample: {settings_data.audio_sample_rate}Hz", 
+                               callback_data="audio_sample_menu")
         ],
         [
-            InlineKeyboardButton("Album", callback_data="mp3_album"),
-            InlineKeyboardButton("Year", callback_data="mp3_year"),
+            InlineKeyboardButton(f"Speed: {settings_data.audio_speed}x", 
+                               callback_data="audio_speed_menu"),
+            InlineKeyboardButton(f"Volume: {settings_data.audio_volume}%", 
+                               callback_data="audio_volume_menu")
         ],
         [
-            InlineKeyboardButton("Genre", callback_data="mp3_genre"),
-            InlineKeyboardButton("Track", callback_data="mp3_track"),
-        ],
-        [
-            InlineKeyboardButton("Cover Art", callback_data="mp3_cover"),
-            InlineKeyboardButton("Clear All", callback_data="mp3_clear"),
+            InlineKeyboardButton(f"Compress: {'ON' if settings_data.compress_audio else 'OFF'}", 
+                               callback_data="audio_toggle_compress"),
+            InlineKeyboardButton(f"Quality: {settings_data.compress_quality}/10", 
+                               callback_data="audio_quality_menu")
         ],
         [InlineKeyboardButton("🔙 Back", callback_data="settings_back")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    tags_text = "\n".join([f"• {k}: {v}" for k, v in settings.mp3_tags.items()]) if settings.mp3_tags else "No tags set"
+    text = """
+    🔊 *Audio Settings*
     
-    message_text = f"""
-    🎵 **MP3 Tag Settings**
+    Configure audio processing settings:
+    • Bitrate: Audio quality (higher = better)
+    • Sample Rate: Audio frequency
+    • Speed: Playback speed
+    • Volume: Audio loudness
+    • Compression: Reduce file size
+    • Quality: Compression level
+    """
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+async def show_mp3_tags(query, settings_data):
+    """Show MP3 tag editor"""
+    keyboard = [
+        [InlineKeyboardButton("Title", callback_data="mp3_title")],
+        [InlineKeyboardButton("Artist", callback_data="mp3_artist")],
+        [InlineKeyboardButton("Album", callback_data="mp3_album")],
+        [InlineKeyboardButton("Year", callback_data="mp3_year")],
+        [InlineKeyboardButton("Genre", callback_data="mp3_genre")],
+        [InlineKeyboardButton("Cover Art", callback_data="mp3_cover")],
+        [InlineKeyboardButton("Clear All", callback_data="mp3_clear")],
+        [InlineKeyboardButton("🔙 Back", callback_data="settings_back")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    tags_text = "\n".join([f"• {k}: {v}" for k, v in settings_data.mp3_tags.items()])
+    if not tags_text:
+        tags_text = "No tags set"
+    
+    text = f"""
+    🎵 *MP3 Tag Editor*
     
     Current Tags:
     {tags_text}
     
-    Click buttons to edit tags.
+    Click to edit each tag.
     """
     
-    await query.edit_message_text(
-        message_text,
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
-async def show_audio_settings(query, settings):
-    """Show audio settings panel"""
+async def show_audio_effects(query, settings_data):
+    """Show audio effects settings"""
     keyboard = [
-        [
-            InlineKeyboardButton(f"Bitrate: {settings.audio_settings.get('bitrate', '192k')}", callback_data="audio_bitrate"),
-            InlineKeyboardButton(f"Sample Rate: {settings.audio_settings.get('sample_rate', '44100')}Hz", callback_data="audio_sample"),
-        ],
-        [
-            InlineKeyboardButton(f"Speed: {settings.audio_speed}x", callback_data="audio_speed"),
-            InlineKeyboardButton(f"Volume: {settings.audio_volume}%", callback_data="audio_volume"),
-        ],
-        [
-            InlineKeyboardButton(f"Compress: {'ON' if settings.compress_audio else 'OFF'}", callback_data="audio_compress"),
-            InlineKeyboardButton(f"Quality: {settings.compress_quality}/10", callback_data="audio_quality"),
-        ],
-        [
-            InlineKeyboardButton("Bass Boost", callback_data="audio_bass"),
-            InlineKeyboardButton("Treble Boost", callback_data="audio_treble"),
-        ],
+        [InlineKeyboardButton("8D Audio", callback_data="effect_8d")],
+        [InlineKeyboardButton("Reverb", callback_data="effect_reverb")],
+        [InlineKeyboardButton("Equalizer", callback_data="effect_eq")],
+        [InlineKeyboardButton("Bass Boost", callback_data="effect_bass")],
+        [InlineKeyboardButton("Treble Boost", callback_data="effect_treble")],
+        [InlineKeyboardButton("Normalize", callback_data="effect_normalize")],
         [InlineKeyboardButton("🔙 Back", callback_data="settings_back")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    message_text = f"""
-    🔊 **Audio Settings**
+    text = """
+    🎛️ *Audio Effects*
     
-    Current Settings:
-    • Bitrate: {settings.audio_settings.get('bitrate', '192k')}
-    • Sample Rate: {settings.audio_settings.get('sample_rate', '44100')}Hz
-    • Channels: {settings.audio_settings.get('channels', 2)}
-    • Speed: {settings.audio_speed}x
-    • Volume: {settings.audio_volume}%
-    • Compression: {'✅ ON' if settings.compress_audio else '❌ OFF'}
-    • Quality: {settings.compress_quality}/10
+    Available effects:
+    • 8D Audio: 3D audio experience
+    • Reverb: Add echo/reverb
+    • Equalizer: Adjust frequency bands
+    • Bass Boost: Enhance low frequencies
+    • Treble Boost: Enhance high frequencies
+    • Normalize: Balance audio levels
+    
+    Click to configure each effect.
     """
     
-    await query.edit_message_text(
-        message_text,
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
