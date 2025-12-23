@@ -1,0 +1,37 @@
+# Core Dependencies
+python-telegram-bot==20.7
+pymongo==4.5.0
+motor==3.3.1  # Async MongoDB driver
+
+# Media Processing
+ffmpeg-python==0.2.0
+pydub==0.25.1
+moviepy==1.0.3
+Pillow==10.1.0
+mutagen==1.47.0
+python-magic==0.4.27
+
+# Utilities
+python-dotenv==1.0.0
+aiofiles==23.2.1
+aiohttp==3.9.1
+aiogram==3.1.1  # Alternative async framework
+pyrogram==2.0.106  # For more advanced features
+
+# Data Processing
+numpy==1.24.3
+pandas==2.0.3
+
+# Web Server
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+httpx==0.25.1
+
+# Async Utilities
+asyncio==3.4.3
+async-timeout==4.0.3
+
+# Development
+pytest==7.4.3
+pytest-asyncio==0.21.1
+black==23.11.0
